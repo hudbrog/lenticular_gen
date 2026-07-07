@@ -1,0 +1,105 @@
+[project]
+name = "lenticular-gen"
+version = "0.1.0"
+description = "Prepare 2D cartoon images for lenticular parallax printing (depth split, inpaint, multi-view render)."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.2.0,<3.0.0",
+    "pillow>=11.0.0,<12.0.0",
+    "pyyaml>=6.0.0,<7.0.0",
+    "typer>=0.15.0,<0.16.0",
+    "matplotlib>=3.10.0,<4.0.0",
+    "scipy>=1.14.0,<2.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.15.0,<2.0.0",
+    "pytest>=8.3.0,<9.0.0",
+    "pytest-cov>=6.0.0,<7.0.0",
+    "ruff>=0.11.0,<0.12.0",
+    "types-pyyaml>=6.0.0,<7.0.0",
+]
+# ML backends are an optional group so the core pipeline (math, IO, project
+# management) can be installed and tested without pulling multi-GB model wheels.
+# Enable with: uv sync --group ml
+ml = [
+    "torch>=2.5.0,<3.0.0",
+    "torchvision>=0.20.0,<1.0.0",
+    "transformers>=4.45.0,<5.0.0",
+    "diffusers>=0.31.0,<1.0.0",
+    "accelerate>=1.0.0,<2.0.0",
+    "rembg>=2.0.0,<3.0.0",
+    # Force a numba that supports Python 3.12; rembg's pinned pymatting pulls
+    # numba 0.53 -> llvmlite capped at <3.10 (see rembg issue #771).
+    "numba>=0.60.0,<1.0.0",
+    # CPU onnxruntime for Rembg: single-image inference is sub-second on CPU, and
+    # avoids CUDA shared-library conflicts with the torch GPU wheels.
+    "onnxruntime>=1.20.0,<2.0.0",
+    "simple-lama-inpainting>=0.1.0,<1.0.0",
+    # Cloud inpainting backends (optional; only needed for --inpainter fal/replicate/openrouter):
+    "fal-client>=0.1.0",
+    "replicate>=1.0.0",
+    "requests>=2.31.0,<3.0.0",
+]
+
+[project.scripts]
+lenticular = "lenticular.cli:app"
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lenticular"]
+
+[tool.pytest.ini_options]
+cache_dir = ".pytest_cache"
+norecursedirs = [".pytest_cache", "pytest-cache-files-*", ".venv", ".tmp"]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["lenticular"]
+strict = true
+warn_unused_configs = true
+
+# ML libraries are largely untyped; the model-wrapper modules import them lazily.
+[[tool.mypy.overrides]]
+module = [
+    "transformers.*",
+    "diffusers.*",
+    "rembg.*",
+    "onnxruntime.*",
+    "simple_lama_inpainting.*",
+    "torch.*",
+    "torchvision.*",
+    "matplotlib.*",
+    "scipy.*",
+    "scipy.ndimage.*",
+    "fal.*",
+    "replicate.*",
+    "requests.*",
+]
+ignore_missing_imports = true
+
+# Torch CUDA wheels live on a dedicated index. Enable with: uv sync --group ml
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu124", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cu124", marker = "sys_platform == 'linux'" }]

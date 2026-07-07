@@ -1,0 +1,47 @@
+# Default pipeline configuration. Copied into each project workdir on `init`
+# and overridden per-project. Edit freely — values here are defaults only.
+
+# --- View rendering ----------------------------------------------------------
+views:
+  count: 8            # N parallax views. 4-12 valid; 8 is a sweet spot for 40-60 LPI.
+  s_max_px: null      # Max horizontal shift (px) between extreme views.
+                     # null => 0.04 * image width (4%). Drives inpaint dilation.
+  flip: false         # Reverse view order (fixes pseudoscopic test prints).
+
+# --- Layering ---------------------------------------------------------------
+layers:
+  feather_px: 1       # Mask edge feather (avoid seams; keep cores hard to dodge halos).
+  focus_layer: null   # Name of zero-parallax anchor layer. null => auto = character.
+  # Per-layer overrides applied on top of assembled defaults:
+  # overrides:
+  #   character:
+  #     shift_px_per_view: 0   # pin a layer to the print plane regardless of depth
+
+# --- Depth model ------------------------------------------------------------
+depth:
+  model: dav2         # dav2 (Depth Anything V2, relative) | marigold (later)
+  dav2_id: depth-anything/Depth-Anything-V2-Large-hf
+
+# --- Segmentation -----------------------------------------------------------
+segment:
+  # Rembg model for the auto subject cutout. isnet-general-use works correctly
+  # on cartoon art; isnet-anime is preferred but its rembg ONNX export is broken
+  # (near-empty masks) as of rembg 2.0.69.
+  bg_removal: isnet-general-use
+
+# --- Inpainting -------------------------------------------------------------
+inpaint:
+  strategy: full-bg-once    # full-bg-once (one run) | per-view (later)
+  backend: lama             # lama (default, offline) | fal | replicate | openrouter
+  prompt: ""                # background description for diffusion backends (empty = context completion)
+  vertical_margin_px: 2     # Extra mask margin top/bottom (anti-flicker).
+  # Cloud backend model IDs (override per-project):
+  fal_model: fal-ai/flux-pro/v1.1/fill
+  replicate_model: black-forest-labs/flux-fill-pro
+  openrouter_model: google/gemini-3-pro-image-preview
+
+# --- Print (reserved for the later interlacing stage; not used by MVP) ------
+print:
+  dpi: 600
+  lpi: 60
+  sheet_mm: [70, 125]
