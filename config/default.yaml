@@ -40,8 +40,14 @@ inpaint:
   replicate_model: black-forest-labs/flux-fill-pro
   openrouter_model: google/gemini-3-pro-image-preview
 
-# --- Print (reserved for the later interlacing stage; not used by MVP) ------
+# --- Print (interlacing + pitch calibration) ---------------------------------
 print:
-  dpi: 600
-  lpi: 60
-  sheet_mm: [70, 125]
+  dpi: 600             # Printer resolution (dots per inch).
+  lpi: 60              # Nominal lens LPI (from the sheet spec).
+  lpi_effective: null  # Measured LPI via `lenticular pitchtest`. Overrides `lpi`
+                       # when set — real sheets drift from their marked value,
+                       # so always calibrate before a final print.
+  sheet_mm: [70, 125]  # Physical print size (width, height) in mm.
+  pitchtest:
+    step: 0.1          # LPI spacing between candidate bands.
+    count: 7           # Number of bands (forced odd so one sits at `lpi`).

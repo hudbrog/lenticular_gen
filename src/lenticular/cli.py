@@ -398,6 +398,170 @@ def render(
     typer.echo(f"Wrote {n_views} views to {proj.views_dir}")
 
 
+@app.command()
+def interlace(
+    project: Path = typer.Argument(..., help="Project workdir."),  # noqa: B008
+    lpi: float = typer.Option(  # noqa: B008
+        None,
+        "--lpi",
+        help="Lens LPI. Overrides config (use lpi_effective if calibrated).",
+    ),
+    dpi: int = typer.Option(None, "--dpi", help="Printer DPI. Overrides config."),  # noqa: B008
+    flip: bool = typer.Option(  # noqa: B008
+        None,
+        "--flip/--no-flip",
+        help="Reverse view order (overrides render_meta / config).",
+    ),
+) -> None:
+    """Interleave N parallax views into one print-ready TIFF -> interlaced.tif.
+
+    Reads views from ``views/`` and column-gathers them at ``dpi / lpi`` columns
+    per lens. Use ``lenticular pitchtest`` first to measure the effective LPI
+    of your sheet+printer; feed it back as ``print.lpi_effective`` in config.
+    """
+    proj = _resolve_project(project)
+    cfg = proj.load_config()
+
+    if not proj.render_meta.exists():
+        raise typer.BadParameter(
+            "render_meta.json not found. Run `lenticular render` first."
+        )
+
+    import json
+
+    from .pipeline.interlace import interlace as interlace_fn
+
+    meta = json.loads(proj.render_meta.read_text(encoding="utf-8"))
+    n_views = int(meta["n_views"])
+
+    view_files = sorted(proj.views_dir.glob("view_*.png"))
+    if len(view_files) != n_views:
+        raise typer.BadParameter(
+            f"Expected {n_views} views in {proj.views_dir}, found {len(view_files)}."
+        )
+
+    print_cfg = cfg["print"] if isinstance(cfg.get("print"), dict) else {}
+    dpi_val = int(dpi or print_cfg.get("dpi", 600))
+    lpi_eff = print_cfg.get("lpi_effective")
+    lpi_val = float(lpi if lpi is not None else (lpi_eff or print_cfg.get("lpi", 60)))
+    sheet_mm = tuple(print_cfg.get("sheet_mm", [70, 125]))
+    flip_val = bool(flip) if flip is not None else bool(meta.get("flip", False))
+
+    views = [load_rgb(f) for f in view_files]
+    out = interlace_fn(views, dpi=dpi_val, sheet_mm=sheet_mm, lpi=lpi_val, flip=flip_val)
+
+    _save_tiff(out, proj.interlaced, dpi=dpi_val)
+    pitch_px = dpi_val / lpi_val
+    view_slot_px = pitch_px / n_views
+    typer.echo(
+        f"Interlaced {n_views} views -> {proj.interlaced} "
+        f"({out.shape[1]}x{out.shape[0]} px, "
+        f"{sheet_mm[0]:.0f}x{sheet_mm[1]:.0f} mm @ {dpi_val} DPI, "
+        f"pitch={pitch_px:.3f} px/lens, LPI={lpi_val:.2f})"
+    )
+    # Feasibility: per-view column width below ~2px toner-spreads / ink-spreads
+    # into adjacent views -> ghosting. Lasers are risky below ~2px; inkjets
+    # hold down to ~1px. Surface this so the user doesn't waste a print.
+    if view_slot_px < 2.0:
+        typer.echo(
+            f"  WARNING: each view is only {view_slot_px:.2f} px wide "
+            f"(pitch {pitch_px:.2f} / {n_views} views). Below ~2px, laser toner "
+            f"spreads across views -> ghosting. Use a higher DPI, fewer views, "
+            f"or lower LPI for clean laser output; inkjets handle ~1px fine."
+        )
+
+
+@app.command()
+def pitchtest(
+    project: Path = typer.Argument(..., help="Project workdir."),  # noqa: B008
+    lpi: float = typer.Option(  # noqa: B008
+        None, "--lpi", help="Center candidate LPI (defaults to config print.lpi)."
+    ),
+    step: float = typer.Option(  # noqa: B008
+        None, "--step", help="LPI spacing between bands (defaults to config)."
+    ),
+    count: int = typer.Option(  # noqa: B008
+        None, "--count", help="Number of bands, odd (defaults to config). Ignored if --band-mm."
+    ),
+    band_mm: float = typer.Option(  # noqa: B008
+        None,
+        "--band-mm",
+        help="Band height in mm. Derives count from sheet height; overrides --count. "
+        "Use for fitting many bands on a large test sheet (e.g. A4).",
+    ),
+    sheet_mm: str = typer.Option(  # noqa: B008
+        None,
+        "--sheet-mm",
+        help="Test sheet size 'WxH' mm (defaults to A4: 210x297). "
+        "Independent of config print.sheet_mm — calibrate on any size sheet.",
+    ),
+    dpi: int = typer.Option(None, "--dpi", help="Printer DPI. Overrides config."),  # noqa: B008
+) -> None:
+    """Generate a banded LPI calibration print -> pitch_test.tif.
+
+    Each band is interlaced at a candidate LPI near the nominal value. Print
+    it, hold it under the lens, and read off the band that flips cleanly — that
+    is your sheet's effective LPI. Set ``print.lpi_effective`` in config.yaml
+    and re-run ``lenticular interlace``.
+
+    Uses a 2-view black/white pattern (not the real N views): LPI is
+    independent of view count, but 2 views gives ~4px color columns that any
+    printer can render, vs the ~1px columns an N=8 test would need.
+
+    The test sheet defaults to **A4** (210x297 mm), not the product size — a
+    bigger sheet fits more bands so you can compare candidates side by side by
+    sliding the lens around. Use ``--band-mm`` to control band height (count is
+    then derived from the sheet height); or ``--count`` for a fixed count.
+    """
+    proj = _resolve_project(project)
+    cfg = proj.load_config()
+
+    from .pipeline.pitchtest import pitch_test_image
+
+    print_cfg = cfg["print"] if isinstance(cfg.get("print"), dict) else {}
+    dpi_val = int(dpi or print_cfg.get("dpi", 600))
+    lpi_val = float(lpi if lpi is not None else print_cfg.get("lpi", 60))
+    # The test sheet defaults to A4 — bigger than the product, so more bands
+    # fit and you can slide a small lens around to compare candidates.
+    if sheet_mm is not None:
+        parts = sheet_mm.lower().split("x")
+        if len(parts) != 2:
+            raise typer.BadParameter("--sheet-mm must be 'WxH' e.g. '210x297'.")
+        sheet = (float(parts[0]), float(parts[1]))
+    else:
+        sheet = (210.0, 297.0)  # A4
+    pt_cfg = print_cfg.get("pitchtest", {}) if isinstance(print_cfg.get("pitchtest"), dict) else {}
+    step_val = float(step if step is not None else pt_cfg.get("step", 0.1))
+    count_val = int(count if count is not None else pt_cfg.get("count", 7))
+
+    out, actual_count = pitch_test_image(
+        dpi=dpi_val,
+        sheet_mm=sheet,
+        lpi_nominal=lpi_val,
+        step=step_val,
+        count=count_val,
+        band_mm=band_mm,
+    )
+    _save_tiff(out, proj.pitch_test, dpi=dpi_val)
+    lo = lpi_val - (actual_count // 2) * step_val
+    hi = lpi_val + (actual_count // 2) * step_val
+    band_h_mm = sheet[1] / actual_count
+    typer.echo(
+        f"Wrote {proj.pitch_test} ({actual_count} bands @ {band_h_mm:.1f} mm each, "
+        f"LPI {lo:.2f}..{hi:.2f}, {out.shape[1]}x{out.shape[0]} px, "
+        f"{sheet[0]:.0f}x{sheet[1]:.0f} mm @ {dpi_val} DPI)"
+    )
+
+
+def _save_tiff(arr: np.ndarray, path: Path, dpi: int) -> None:
+    """Save an RGB array as TIFF with physical DPI metadata."""
+    from PIL import Image
+
+    Image.fromarray(arr.astype(np.uint8)).save(
+        path, format="TIFF", dpi=(dpi, dpi), compression="tiff_lzw"
+    )
+
+
 def _resolve_s_max(cfg: dict[str, Any], layerset: LayerSet) -> float:
     """Recover s_max from config or, failing that, the layerset's max shift."""
     views = cfg.get("views")

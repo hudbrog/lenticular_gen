@@ -14,7 +14,9 @@ Layout created by :meth:`Project.init`::
         layers.json           # ordered layers + focus index
         masks/                # <layer>.png boolean masks (0/255)
         views/                # view_00.png ... view_{N-1}.png
-"""
+        interlaced.tif        # N views column-gathered for printing (after interlace)
+        pitch_test.tif        # banded LPI calibration print (after pitchtest)
+    """
 
 from __future__ import annotations
 
@@ -81,6 +83,14 @@ class Project:
     @property
     def views_dir(self) -> Path:
         return self.path / "views"
+
+    @property
+    def interlaced(self) -> Path:
+        return self.path / "interlaced.tif"
+
+    @property
+    def pitch_test(self) -> Path:
+        return self.path / "pitch_test.tif"
 
     def mask(self, name: str) -> Path:
         return self.masks_dir / f"{name}.png"

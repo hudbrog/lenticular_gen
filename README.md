@@ -19,6 +19,9 @@ source.png
    │  lenticular preview     preview.gif         (animated, holes flagged magenta)
    │  lenticular inpaint     bg_inpaint.png      (LaMa, full-bg-once)
    │  lenticular render      views/view_*.png    (N parallax views)
+   │  lenticular pitchtest   pitch_test.tif      (banded LPI calibration; run any time)
+   │  ── read correct LPI off the printed test, set print.lpi_effective ──
+   │  lenticular interlace   interlaced.tif      (print-ready, DPI-tagged TIFF)
 ```
 
 Each stage is a CLI subcommand that reads/writes artifacts in a project workdir,
@@ -31,9 +34,10 @@ so you can stop, review/edit, and resume at any point.
 - **M2 — Assemble + preview**: depth-ordered `layers.json` + animated parallax GIF/strip. ✅
 - **M3 — Inpaint + render**: LaMa full-bg-once inpaint + N parallax view PNGs. ✅
 - **M4 — Hardening**: Marigold backend, `--flip`, per-layer overrides. ✅
+- **M5 — Interlace**: column-gather interlacing to print-ready TIFF + LPI pitch
+  calibration generator. ✅
 
-Lenticular interlacing (DPI/LPI → print-ready TIFF) and a PySide6 GUI are
-deferred to later phases; config fields are reserved.
+A PySide6 GUI is deferred to a later phase; config fields are reserved.
 
 ## Install
 
@@ -84,7 +88,27 @@ lenticular inpaint  workdir/scene --inpainter fal --prompt "cozy forest interior
 # 7. Render N final views over the inpainted background
 lenticular render   workdir/scene              # -> views/view_00..07.png
 lenticular render   workdir/scene --flip
+
+# 8. Calibrate lens pitch (first run / new sheet batch only)
+lenticular pitchtest workdir/scene             # A4 sheet, 7 bands @ ~42mm each
+lenticular pitchtest workdir/scene --lpi 69.7 --step 0.05 --band-mm 20  # fine, many bands
+#    ... edit config.yaml: print.lpi_effective: 69.7  # the band that flipped cleanly
+
+# 9. Interlace views into one print-ready TIFF
+lenticular interlace workdir/scene             # -> interlaced.tif
+lenticular interlace workdir/scene --lpi 69.7  # override without editing config
 ```
+
+The pitch test can run any time after `init` — it needs no depth/segment/render
+artifacts. It defaults to an **A4 sheet** (210x297 mm), not the product size:
+a bigger sheet fits more bands, so you can slide a small lens around to compare
+candidates side by side. Use `--band-mm` to control band height (count is then
+derived from the sheet height); use `--sheet-mm 'WxH'` for other sheet sizes.
+
+It uses a 2-view black/white pattern (LPI is independent of N), so each color
+column is ~4 px wide and renders on any printer. Print at 100% scale, laminate
+the lens (grooves vertical, parallel to the columns), tilt left↔right, and read
+off the band that flips cleanly. That band's label is your `lpi_effective`.
 
 ### Interactive SAM2 picker
 
@@ -133,6 +157,12 @@ inpaint:
   backend: lama                   # lama (default, offline) | fal | replicate | openrouter
   prompt: ""                      # background description for diffusion backends
   vertical_margin_px: 2
+
+print:
+  dpi: 600                        # printer resolution
+  lpi: 60                         # nominal lens LPI (sheet spec)
+  lpi_effective: null             # measured via `lenticular pitchtest`; overrides lpi
+  sheet_mm: [70, 125]             # physical print size (matches 14:25 source aspect)
 ```
 
 ### Inpainting backends
@@ -167,6 +197,20 @@ foreground most. `--flip` negates the sign (fixes pseudoscopic test prints).
 was previously occluded. We inpaint the **full background once** with LaMa —
 masking the union of all foreground silhouettes dilated by ±`s_max` — so every
 view composites over the same clean background (no per-view flicker).
+
+**Interlacing.** A lenticular sheet is vertical lenses, each `pitch_px = DPI/LPI`
+pixels wide; under each lens we stack N thin vertical strips — one column from
+each view. The interlacer compresses each view to `width/N` columns (Lanczos,
+fine to resample within a view) and then column-gathers across views with
+nearest-neighbor — never blending adjacent views, which is what the lens
+geometry demands. Output width is forced to a multiple of N so the per-view
+cycle tiles cleanly across the sheet.
+
+**Pitch calibration.** Real sheets drift from their marked LPI and printer DPI
+isn't exact; if `pitch_px` is off by ~0.5% the views bleed across lenses
+(ghosting / muddy flip). `lenticular pitchtest` prints a stack of candidate
+LPI bands; the one that flips cleanly under the actual lens is your
+`lpi_effective`. Feed it back into `config.yaml` and re-run `interlace`.
 
 ## Notes & gotchas
 
